@@ -93,6 +93,7 @@ You’ll be prompted for the hash and wordlist path.
 ./hashsmasher.py -H <hash> -w <wordlist>
 ```
 
+---
 
 
 ## 🛠 Dependencies
