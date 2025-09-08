@@ -122,5 +122,3 @@ hashsmasher/
 MIT License — feel free to fork, hack, and improve 🚀
 
 ---
-
-Do you want me to also add a **prebuilt binary usage section** (so users without Rust don’t need to compile, just download from GitHub Releases), or do you prefer to keep it *source-only build* for now?
