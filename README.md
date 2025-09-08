@@ -93,21 +93,7 @@ You’ll be prompted for the hash and wordlist path.
 ./hashsmasher.py -H <hash> -w <wordlist>
 ```
 
----
 
-## 📦 Project Structure
-
-```
-hashsmasher/
-├── hashsmasher.py             # Python CLI wrapper
-├── rust_hash_cracker/         # Rust core engine
-│   ├── Cargo.toml
-│   ├── src/main.rs
-│   └── kernels/               # OpenCL kernels (md5.cl, sha1.cl, sha256.cl)
-└── README.md
-```
-
----
 
 ## 🛠 Dependencies
 
