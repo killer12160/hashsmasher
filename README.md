@@ -24,7 +24,7 @@ HashSmasher is designed to be **simple, fast, and user-friendly** with GPU accel
 
 * Crack **MD5 / SHA1 / SHA256** hashes
 * **GPU acceleration** via OpenCL (with CPU fallback)
-* **Python CLI wrapper** with ASCII banner
+* **Python CLI**
 * Two usage modes:
 
   * Interactive prompts (`./hashsmasher.py`)
