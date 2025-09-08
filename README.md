@@ -61,8 +61,9 @@ pip install colorama
 ### 3. Clone and build HashSmasher
 
 ```bash
-git clone https://github.com/<yourusername>/hashsmasher.git
+git clone https://github.com/killer12160/hashsmasher.git
 cd hashsmasher
+chmod +x hashsmasher.py
 cargo build --release --manifest-path rust_hash_cracker/Cargo.toml
 ```
 
