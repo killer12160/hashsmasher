@@ -14,27 +14,23 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::Instant;
-use md5;
-use sha1::{Sha1, Digest as Sha1Digest};
-use sha2::Sha256;
 
+use md5;
+use sha1::Sha1;
+use sha2::Sha256;
+use sha1::Digest as Sha1DigestTrait;
+use sha2::Digest as Sha2DigestTrait;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Args {
-    
     #[arg(long)]
     hash: Option<String>,
-
-    
     #[arg(long)]
     wpa: Option<String>,
-
-    
     #[arg(long)]
     wordlist: String,
 }
-
 
 #[derive(Debug, Clone, Copy)]
 enum Algo {
@@ -52,13 +48,11 @@ fn detect_algo(hash: &str) -> Result<Algo> {
     }
 }
 
-
 fn read_wordlist(path: &str) -> Result<Vec<String>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     Ok(reader.lines().filter_map(Result::ok).collect())
 }
-
 
 struct WpaData {
     ssid: String,
@@ -67,7 +61,10 @@ struct WpaData {
 
 fn parse_wpa_file(path: &str) -> Result<WpaData> {
     let content = std::fs::read_to_string(path)?;
-    let first_line = content.lines().next().ok_or_else(|| anyhow!("Empty WPA file"))?;
+    let first_line = content
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow!("Empty WPA file"))?;
     let parts: Vec<&str> = first_line.split(':').collect();
     if parts.len() < 4 {
         return Err(anyhow!("Invalid .22000 format"));
@@ -78,38 +75,71 @@ fn parse_wpa_file(path: &str) -> Result<WpaData> {
     })
 }
 
-
 fn kernel_path(file: &str) -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    exe.parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("kernels")
-        .join(file)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(release_dir) = exe.parent() {
+            if let Some(target_dir) = release_dir.parent() {
+                if let Some(project_dir) = target_dir.parent() {
+                    let candidate = project_dir.join("kernels").join(file);
+                    if candidate.exists() {
+                        return candidate;
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join("rust_hash_cracker").join("kernels").join(file);
+        if candidate.exists() {
+            return candidate;
+        }
+        let candidate2 = cwd.join("kernels").join(file);
+        if candidate2.exists() {
+            return candidate2;
+        }
+    }
+    PathBuf::from(file)
 }
-
 
 fn main() -> Result<()> {
     let args = Args::parse();
     let words = read_wordlist(&args.wordlist)?;
     println!("[*] Loaded {} words from {}", words.len(), args.wordlist);
 
-
     println!("[*] Initializing OpenCL device...");
-    let devices = get_all_devices(CL_DEVICE_TYPE_ALL)?;
+    let devices = match get_all_devices(CL_DEVICE_TYPE_ALL) {
+        Ok(devs) => devs,
+        Err(e) => {
+            eprintln!("[!] OpenCL runtime unavailable: {:#}", e);
+            println!("[!] Falling back to CPU mode...");
+            return cpu_fallback(&args, &words);
+        }
+    };
+
     if devices.is_empty() {
         println!("[!] No OpenCL device found → using CPU fallback");
         return cpu_fallback(&args, &words);
     }
 
-    let device_id = devices[0]; 
+    let device_id = devices[0];
     let device = Device::new(device_id);
-    let context = Context::from_device(&device)?;
-    let queue = unsafe { CommandQueue::create_with_properties(&context, device_id, 0, 0)? };
+    let context = match Context::from_device(&device) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("[!] Failed to create OpenCL context: {:#}", e);
+            println!("[!] Falling back to CPU mode...");
+            return cpu_fallback(&args, &words);
+        }
+    };
 
+    let queue = match unsafe { CommandQueue::create_with_properties(&context, device_id, 0, 0) } {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("[!] Failed to create command queue: {:#}", e);
+            println!("[!] Falling back to CPU mode...");
+            return cpu_fallback(&args, &words);
+        }
+    };
 
     if let Some(hash) = args.hash.clone() {
         let target_hash = hash.trim().to_lowercase();
@@ -123,12 +153,20 @@ fn main() -> Result<()> {
         };
 
         println!("[*] Loading kernel from {:?}...", kernel_file);
-        let kernel_source = std::fs::read_to_string(&kernel_file)?;
-        let mut program = Program::create_from_source(&context, &kernel_source)?;
+        let kernel_source = match std::fs::read_to_string(&kernel_file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[!] Failed to read kernel file {:?}: {}", kernel_file, e);
+                println!("[!] Falling back to CPU mode...");
+                return cpu_fallback(&args, &words);
+            }
+        };
 
+        let mut program = Program::create_from_source(&context, &kernel_source)?;
         if let Err(_) = program.build(&[device_id], "") {
-            let log = program.get_build_log(device_id)?;
-            eprintln!("❌ Kernel build failed:\n{}", log);
+            if let Ok(log) = program.get_build_log(device_id) {
+                eprintln!("❌ Kernel build failed:\n{}", log);
+            }
             println!("[!] Falling back to CPU mode...");
             return cpu_fallback(&args, &words);
         }
@@ -142,12 +180,20 @@ fn main() -> Result<()> {
 
         let kernel_file = kernel_path("wpa.cl");
         println!("[*] Loading kernel from {:?}...", kernel_file);
-        let kernel_source = std::fs::read_to_string(&kernel_file)?;
-        let mut program = Program::create_from_source(&context, &kernel_source)?;
+        let kernel_source = match std::fs::read_to_string(&kernel_file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[!] Failed to read WPA kernel file {:?}: {}", kernel_file, e);
+                println!("[!] Falling back to CPU mode...");
+                return cpu_fallback(&args, &words);
+            }
+        };
 
+        let mut program = Program::create_from_source(&context, &kernel_source)?;
         if let Err(_) = program.build(&[device_id], "") {
-            let log = program.get_build_log(device_id)?;
-            eprintln!("❌ WPA Kernel build failed:\n{}", log);
+            if let Ok(log) = program.get_build_log(device_id) {
+                eprintln!("❌ WPA Kernel build failed:\n{}", log);
+            }
             println!("[!] Falling back to CPU mode...");
             return cpu_fallback(&args, &words);
         }
@@ -162,9 +208,8 @@ fn main() -> Result<()> {
 }
 
 fn fixed_word_len() -> usize {
-    64 
+    64
 }
-
 
 fn crack_wordlist(
     words: &[String],
@@ -259,7 +304,6 @@ fn crack_wordlist(
     Ok(())
 }
 
-
 fn cpu_fallback(args: &Args, words: &[String]) -> Result<()> {
     if let Some(hash) = &args.hash {
         let target_hash = hash.trim().to_lowercase();
@@ -309,4 +353,3 @@ fn cpu_fallback(args: &Args, words: &[String]) -> Result<()> {
 
     Ok(())
 }
-
